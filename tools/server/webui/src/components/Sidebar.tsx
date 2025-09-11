@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { classNames } from '../utils/misc';
-import { Conversation } from '../utils/types';
+import { Conversation, Message } from '../utils/types';
 import StorageUtils from '../utils/storage';
 import { useNavigate, useParams } from 'react-router';
 import {
   ArrowDownTrayIcon,
+  CloudArrowUpIcon,
   EllipsisVerticalIcon,
   PencilIcon,
   PencilSquareIcon,
@@ -15,6 +16,7 @@ import { BtnWithTooltips } from '../utils/common';
 import { useAppContext } from '../utils/app.context';
 import toast from 'react-hot-toast';
 import { useModals } from './ModalProvider';
+import { db } from '../utils/storage'; // am Anfang der Datei
 
 export default function Sidebar() {
   const params = useParams();
@@ -45,6 +47,102 @@ export default function Sidebar() {
     () => groupConversationsByDate(conversations),
     [conversations]
   );
+
+  // Export all conversations
+  const onExportAll = async () => {
+    if (conversations.length === 0) {
+      toast.error('No conversations to export');
+      return;
+    }
+
+    try {
+      const allData = await Promise.all(
+        conversations.map(async (conv) => {
+          const messages = await StorageUtils.getMessages(conv.id);
+          return { conv, messages };
+        })
+      );
+
+      const blob = new Blob([JSON.stringify(allData, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `all_conversations_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('All conversations exported');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to export conversations');
+    }
+  };
+
+  // Upload and import all conversations
+  const onUploadAll = async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement)?.files?.[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const importedData: { conv: Conversation; messages: Message[] }[] =
+          JSON.parse(text);
+
+        if (!Array.isArray(importedData)) {
+          toast.error('Invalid file format');
+          return;
+        }
+
+        await db.transaction('rw', db.conversations, db.messages, async () => {
+          for (const item of importedData) {
+            const { conv, messages } = item;
+
+            // Check if conversation already exists
+            const existing = await db.conversations.get(conv.id);
+            if (existing) {
+              // Optional: skip, overwrite, or rename?
+              toast(`Conversation "${conv.name}" already exists, skipping...`, {
+                icon: '⚠️',
+              });
+              continue;
+            }
+
+            // Save conversation
+            await db.conversations.add(conv);
+
+            // Save messages
+            for (const msg of messages) {
+              await db.messages.put(msg);
+            }
+          }
+        });
+
+        toast.success(
+          `Successfully imported ${importedData.length} conversation(s)`
+        );
+        // Refresh the list
+        setConversations(await StorageUtils.getAllConversations());
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          console.error(err);
+          toast.error('Failed to import: ' + err.message);
+        } else {
+          console.error(err);
+          toast.error('Failed to import: unknown error');
+        }
+      }
+    };
+
+    input.click();
+  };
 
   return (
     <>
@@ -104,6 +202,26 @@ export default function Sidebar() {
           >
             <PencilSquareIcon className="w-5 h-5" />
             New conversation
+          </button>
+
+          {/* Export All Button */}
+          <button
+            className="btn btn-ghost justify-start px-2"
+            onClick={onExportAll}
+            aria-label="Export all conversations"
+          >
+            <ArrowDownTrayIcon className="w-5 h-5" />
+            Export all
+          </button>
+
+          {/* Upload All Button */}
+          <button
+            className="btn btn-ghost justify-start px-2"
+            onClick={onUploadAll}
+            aria-label="Upload all conversations"
+          >
+            <CloudArrowUpIcon className="w-5 h-5" />
+            Upload all
           </button>
 
           {/* list of conversations */}

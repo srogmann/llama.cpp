@@ -292,3 +292,5 @@ async function migrationLStoIDB() {
     localStorage.setItem('migratedToIDB', '1');
   });
 }
+
+export { db }; // Füge diese Zeile hinzu
