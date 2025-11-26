@@ -25,7 +25,7 @@ const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 const MAX_ASSET_SIZE = 32000;
 
 /** public/index.html.gz minified flag */
-const ENABLE_JS_MINIFICATION = true;
+const ENABLE_JS_MINIFICATION = false;
 
 function llamaCppBuildPlugin() {
 	return {
