@@ -1,14 +1,14 @@
 // tests/test-common-ngram-map.cpp
+//
+// Unit tests of common/ngram-map.cpp.
+//
 #include "log.h"
 #include "ngram-map.h"
 
 #include <cassert>
 #include <cstdio>
-#include <cstring>
 #include <iostream>
 #include <iomanip>
-#include <map>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -50,7 +50,7 @@ static std::string tokens_to_string(const llama_tokens & tokens) {
     std::ostringstream oss;
     oss << "[";
     for (size_t i = 0; i < tokens.size(); ++i) {
-        char c = (tokens[i] < 32) ?  '.' : static_cast<char>(tokens[i]);
+        char c = (tokens[i] < 32 || tokens[i] > 126) ?  '.' : static_cast<char>(tokens[i]);
         oss << c;
     }
     oss << "]";
@@ -58,7 +58,7 @@ static std::string tokens_to_string(const llama_tokens & tokens) {
 }
 
 
-// base class of a adapter of a speculative implementation.
+// base class of an adapter of a speculative implementation.
 class spec_impl_adapter {
 public:
     virtual ~spec_impl_adapter() = default;
@@ -110,7 +110,7 @@ class spec_test_builder {
                 case PRINT_STATE:   t = "PRINT_STATE"; break;
             }
             return t + "[id='" + id + "' text='"
-                + (text.size() > 80 ? text.substr(0, 60) + "[...]" + text.substr(text.size() - 20, text.size()) : text)
+                + (text.size() > 80 ? text.substr(0, 60) + "[...]" + text.substr(text.size() - 20) : text)
                 + "' text_rej='" + text_rej + "' idx=" + std::to_string(idx_tokens) + "]";
         }
     };
@@ -304,6 +304,7 @@ public:
                     {
                         size_t num_tokens = current_context.size();
                         current_context = llama_tokens();
+                        // reserve(14000) was used to reproduce the OOB in test_ngram_map_key_pr23936_oob before the fix.
                         current_context.reserve(14000);
                         for (size_t j = 0; j < actions.size(); j++) {
                             if (actions[j].idx_tokens <= num_tokens) {
@@ -395,9 +396,11 @@ public:
     }
 
     // prime number used for LCG hash function (32 bit), it is near (sqrt(5) - 1)/2 * 2^32.
+    // Source: copy of LOG_FACTOR in common/ngram-map.cpp
     #define LCG_FACTOR 2654435761UL
 
     // Compute the LCG hash of a n-gram of size len at offset start.
+    // Source: copy of common_ngram_map_hash in common/ngram-map.cpp
     static uint32_t common_ngram_map_hash(const llama_tokens & tokens, size_t start, size_t len) {
         uint32_t hash = 0;
         for (size_t i = 0; i < len; ++i) {
@@ -487,18 +490,6 @@ public:
     }
 
 };
-
-// regex used to escape '\n'
-static const std::regex re_newline("\n");
-
-// instruction accept: match[1] = cmd, match[2] = len_accepted, match[3] = expected draft
-static const std::regex re_accept(R"(([AP])(\d{1,3}):'([^']+)')");
-// instruction reject: match[1] = expected draft
-static const std::regex re_reject(R"(R:'([^']+)')");
-// instruction delete: match[1] = position, match[2] = length
-static const std::regex re_delete(R"(D(\d{1,3})/(\d{1,3}))");
-// instruction user-prompt: match[1] = length
-static const std::regex re_user_prompt(R"(U(\d{1,3}))");
 
 static int test_ngram_simple() {
     const std::string test_name = "ngram_simple_test";
@@ -842,6 +833,9 @@ static int test_ngram_map_key_with_values() {
         //"* 17:the-key1:value-1.2----:17-\n"
         //"* 18:the-key1:value-1.2----:18-\n";
 
+       // Before the introduction of the fluent API the tests
+       // used strings with special instructions, e.g. "{A14:'value-1.1----:'} = accept 14 chars.
+       //
        // "# common/ngram-map-k, test 3 --\n" // <- line 0, length: 32
        // "* 01:the-key1:value-1.1----:01-\n" // <- line 1
        // "* 02:the-key2:value-2.1----:02-\n"
@@ -931,6 +925,7 @@ int main(int argc, char ** argv) {
 
     int num_failed = 0;
     num_failed += test_ngram_simple();
+    num_failed += test_ngram_map_key_only();
     num_failed += test_ngram_map_key_only_reasoning();
     num_failed += test_ngram_map_key_with_values();
     // The test of PR #23936 has a duration of 1.6 seconds.
